@@ -109,7 +109,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Code for any layer in React, Leptos, SwiftUI or Compose: an instance's call and its component's
 /// definition, a component's (or set's) definition, or the layer tree (React and Leptos wrap it
-/// in a function component).
+/// in a function component). A tree's code starts with the import line of every connected instance
+/// inside it, once each.
 pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     let Some(n) = doc.node(id) else { return String::new() };
     if let Some(code) = crate::code_connect::link(doc, id, lang).and_then(|l| crate::code_connect::connected_code(doc, id, lang, l)) {
@@ -119,23 +120,48 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     match (&n.kind, comp) {
         (NodeKind::Instance { .. }, Some(c)) => format!("{}\n{}", usage(doc, id, lang, 0).unwrap_or_default(), definition(doc, &c, lang)),
         (NodeKind::Component { .. } | NodeKind::ComponentSet { .. }, Some(c)) => definition(doc, &c, lang),
-        _ => match lang {
-            CodeLang::React | CodeLang::Leptos => {
-                let c = Component { comp: id, set: None, type_name: component_type_name(&n.name), params: Vec::new() };
-                if lang == CodeLang::Leptos { leptos(doc, &c) } else { react(doc, &c) }
-            }
-            CodeLang::SwiftUi => {
-                let mut out = String::new();
-                swift(&Ctx::new(doc, id), id, 0, &mut out, &[]);
-                out
-            }
-            _ => {
-                let mut out = String::new();
-                compose(&Ctx::new(doc, id), id, 0, &mut out);
-                out
-            }
-        },
+        _ => {
+            let tree = match lang {
+                CodeLang::React | CodeLang::Leptos => {
+                    let c = Component { comp: id, set: None, type_name: component_type_name(&n.name), params: Vec::new() };
+                    if lang == CodeLang::Leptos { leptos(doc, &c) } else { react(doc, &c) }
+                }
+                CodeLang::SwiftUi => {
+                    let mut out = String::new();
+                    swift(&Ctx::new(doc, id), id, 0, &mut out, &[]);
+                    out
+                }
+                _ => {
+                    let mut out = String::new();
+                    compose(&Ctx::new(doc, id), id, 0, &mut out);
+                    out
+                }
+            };
+            format!("{}{tree}", tree_imports(doc, id, lang))
+        }
     }
+}
+
+/// The import line of every connected instance below `root`, once each, each on its own line and
+/// followed by a blank line (`""` when there are none).
+fn tree_imports(doc: &Document, root: NodeId, lang: CodeLang) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut stack = vec![(root, 0usize)];
+    while let Some((id, depth)) = stack.pop() {
+        let Some(n) = doc.node(id) else { continue };
+        if id != root
+            && matches!(n.kind, NodeKind::Instance { .. })
+            && let Some(line) = crate::code_connect::link(doc, id, lang).map(|l| crate::code_connect::import_line(l, lang))
+            && !line.is_empty()
+            && !lines.contains(&line)
+        {
+            lines.push(line);
+        }
+        if depth < crate::codegen::MAX_DEPTH {
+            stack.extend(n.children.iter().rev().map(|c| (*c, depth + 1)));
+        }
+    }
+    if lines.is_empty() { String::new() } else { format!("{}\n\n", lines.join("\n")) }
 }
 
 fn is_component(doc: &Document, id: NodeId) -> bool {
@@ -521,8 +547,7 @@ pub fn usage(doc: &Document, id: NodeId, lang: CodeLang, depth: usize) -> Option
     let c = main_of(doc, id).and_then(|m| describe(doc, m))?;
     let values = instance_values(doc, id, &c)?;
     let pad = if lang == CodeLang::React { "  ".repeat(depth) } else { indent(depth) };
-    // A connected component: its real snippet. shortcut: inside a layer tree it brings no import
-    // line; collect them at the top of the tree's code when people ask for it.
+    // A connected component: its real snippet (a tree's code starts with its import line).
     if let Some(link) = crate::code_connect::link(doc, id, lang) {
         return Some(crate::code_connect::render(doc, &c, &values, link, lang, &pad));
     }

@@ -83,6 +83,15 @@ fn connected_instances_show_the_real_snippet() {
     let screen = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 500, "width": 400, "height": 300, "name": "Screen"})));
     ex(&mut s, "instance.create", json!({"component": c, "x": 20, "y": 30, "parent": screen}));
     assert!(code(&mut s, screen, "react").contains("<Card title=\"Hello\" dot={true} onClick={onClick}>•</Card>\n"));
+    // The tree's code collects the connected instances' import lines at the top, once each.
+    let tree = code(&mut s, screen, "react");
+    assert!(tree.starts_with("import { Card } from \"@acme/ui\";\n\n"), "{tree}");
+    ex(&mut s, "instance.create", json!({"component": c, "x": 20, "y": 200, "parent": screen}));
+    let tree = code(&mut s, screen, "react");
+    assert_eq!(tree.matches("import { Card } from \"@acme/ui\";").count(), 1, "{tree}");
+    let tree = code(&mut s, screen, "swiftui");
+    assert!(tree.starts_with("import AcmeUI\n\n"), "{tree}");
+    assert!(!code(&mut s, screen, "compose").starts_with("import"), "no link in Compose");
     // Literal braces stay; fields left out keep their value.
     ex(&mut s, "codeConnect.set", json!({"id": c, "template": "<Card style={{gap: 4}} label={title} />"}));
     assert_eq!(code(&mut s, c, "react"), "import { Card } from \"@acme/ui\";\n\n<Card style={{gap: 4}} label=\"Hello\" />\n");
